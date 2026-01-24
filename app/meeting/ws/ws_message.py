@@ -7,6 +7,10 @@ from app.infra.db import AsyncSessionLocal
 from app.models.message import ChatMessage
 from app.models.room import RoomMember, RoomLiveSession
 from app.meeting.ws.manager import manager
+from app.summarization.logic.meeting_data import fetch_meeting_transcript, format_transcript_for_ai
+from app.summarization.logic.ai_summary import summarize_meeting, save_summary_to_db
+from app.models.room import Room
+
 
 async def handle_chat_message(session_id: str, user_id: str, data: dict):
     """
@@ -49,15 +53,20 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
             user = user_result.scalar_one_or_none()
             
             if not user:
-                print(f"[WS Chat] User {user_id} not found in database")
-                return
-            
+                # print(f"[WS Chat] User {user_id} not found in database")
+                # return
+                # 開発用: Userがいなくてもダミーメンバーとして登録
+                print(f"[WS Chat] User {user_id} not found. Creating dummy member.")
+                display_name = f"Guest_{user_id[-6:]}"
+            else:
+                display_name = user.display_name or f"User_{user_id[:6]}"
+
             # Create RoomMember
             member = RoomMember(
                 id=f"rm_{uuid.uuid4().hex[:16]}",
                 room_id=room_id,
                 user_id=user_id,
-                display_name=user.display_name or f"User_{user_id[:6]}",
+                display_name=display_name,
                 role="member",
                 joined_at=datetime.utcnow()
             )
@@ -106,3 +115,98 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
             }
         }
         await manager.broadcast(session_id, broadcast_data)
+
+
+async def handle_summary_request(session_id: str, data: dict):
+    """
+    Handle summary generation request via WebSocket
+    """
+    print(f"[WS Summary] Request received for session {session_id}")
+    async with AsyncSessionLocal() as db_session:
+        # Get Room ID from Session
+        session_result = await db_session.execute(
+            select(RoomLiveSession).where(RoomLiveSession.id == session_id)
+        )
+        live_session = session_result.scalar_one_or_none()
+        
+        if not live_session:
+            print(f"[WS Summary] Session {session_id} not found.")
+            return
+        
+        room_id = live_session.room_id
+        
+        # Room info
+        room_stmt = select(Room).where(Room.id == room_id)
+        room_result = await db_session.execute(room_stmt)
+        room = room_result.scalar_one_or_none()
+        
+        if not room:
+            print(f"[WS Summary] Room {room_id} not found.")
+            return
+
+        # Fetch Transcript
+        transcript = await fetch_meeting_transcript(db_session, room_id)
+        
+        if not transcript:
+            print(f"[WS Summary] No transcript found for room {room_id}")
+            # Send empty summary notification
+            await manager.broadcast(session_id, {
+                "type": "summary",
+                "data": {
+                    "content": "まだ会話データがありません。チャットで会話してから試してください。",
+                    "action_items": [],
+                    "key_decisions": [],
+                    "from_seq": 0,
+                    "to_seq": 0,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+            })
+            return
+
+        print(f"[WS Summary] Generating summary for {len(transcript)} messages...")
+        
+        # Notify "Processing..."
+        await manager.broadcast(session_id, {
+            "type": "summary_status",
+            "status": "processing",
+            "message": "要約を生成しています..."
+        })
+
+        # Generate Summary
+        formatted_text = format_transcript_for_ai(transcript)
+        summary_dict = await summarize_meeting(formatted_text)
+        
+        # Save to DB
+        summary_data_to_save = {
+            "room_title": room.title,
+            "processed_at": datetime.utcnow().isoformat(),
+            "filtered_message_count": len(transcript),
+            "summary": summary_dict
+        }
+        await save_summary_to_db(room_id, summary_data_to_save, db_session)
+
+        # Broadcast Result
+        from_seq = 0 
+        to_seq = len(transcript)
+        
+        # Frontend expects arrays for action_items and key_decisions
+        task = summary_dict.get("task", "")
+        decided = summary_dict.get("decided", "")
+        
+        action_items = [task] if task else []
+        key_decisions = [decided] if decided else []
+
+        await manager.broadcast(session_id, {
+            "type": "summary",
+            "data": {
+                "summary_id": f"sum_{uuid.uuid4().hex[:8]}",
+                "content": summary_dict.get("main_point", ""),
+                "action_items": action_items,
+                "key_decisions": key_decisions,
+                "from_seq": from_seq,
+                "to_seq": to_seq,
+                "created_at": datetime.utcnow().isoformat()
+            }
+        })
+        print(f"[WS Summary] Summary broadcasted for session {session_id}")
+

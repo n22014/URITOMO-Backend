@@ -120,14 +120,15 @@ URITOMO API provides real-time translation with cultural context explanations.
     app.add_middleware(RequestIDMiddleware)
     
     # Handle CORS
+    # Handle CORS
     # Note: allow_origins=["*"] cannot be used with allow_credentials=True
-    allow_all_origins = "*" in settings.cors_origins
+    # Using allow_origin_regex to allow any origin with credentials for development
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=settings.cors_credentials if not allow_all_origins else False,
-        allow_methods=settings.cors_methods,
-        allow_headers=settings.cors_headers,
+        allow_origin_regex=".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # Root Route
