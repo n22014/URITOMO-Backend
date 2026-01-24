@@ -39,8 +39,31 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
             )
         )
         member = member_result.scalar_one_or_none()
+        
+        # Auto-register user as RoomMember if not exists (for development convenience)
         if not member:
-            return
+            from app.models.user import User
+            user_result = await db_session.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            
+            if not user:
+                print(f"[WS Chat] User {user_id} not found in database")
+                return
+            
+            # Create RoomMember
+            member = RoomMember(
+                id=f"rm_{uuid.uuid4().hex[:16]}",
+                room_id=room_id,
+                user_id=user_id,
+                display_name=user.display_name or f"User_{user_id[:6]}",
+                role="member",
+                joined_at=datetime.utcnow()
+            )
+            db_session.add(member)
+            await db_session.flush()
+            print(f"[WS Chat] Auto-registered user {user_id} as RoomMember in room {room_id}")
 
         # 3. Get next sequence number for this room
         seq_result = await db_session.execute(
