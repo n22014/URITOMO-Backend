@@ -210,3 +210,55 @@ async def handle_summary_request(session_id: str, data: dict):
         })
         print(f"[WS Summary] Summary broadcasted for session {session_id}")
 
+
+async def handle_translate_and_broadcast(session_id: str, text: str, source_lang: str):
+    """
+    Translate text and broadcast to session
+    """
+    from app.core.config import settings
+    
+    target_lang = "en" if source_lang == "ja" else "ja" # Simple toggle for now
+    translated_text = ""
+    explanation = ""
+
+    # Mock Translation
+    if settings.translation_provider == "MOCK":
+        translated_text = f"[Mock Translate] {text}"
+    
+    # OpenAI Translation
+    elif settings.translation_provider == "OPENAI" and settings.openai_api_key:
+        try:
+             from openai import AsyncOpenAI
+             client = AsyncOpenAI(api_key=settings.openai_api_key)
+             
+             prompt = f"Translate the following text from {source_lang} to {target_lang}. Return only the translated text."
+             response = await client.chat.completions.create(
+                 model="gpt-4o",
+                 messages=[
+                     {"role": "system", "content": "You are a professional translator."},
+                     {"role": "user", "content": prompt + "\n\n" + text}
+                 ]
+             )
+             translated_text = response.choices[0].message.content.strip()
+             
+        except Exception as e:
+            print(f"[Translation Error] {e}")
+            translated_text = f"[Error] {text}"
+    
+    else:
+        # Fallback
+        translated_text = f"[No Provider] {text}"
+
+    # Broadcast Translation
+    await manager.broadcast(session_id, {
+        "type": "translation",
+        "data": {
+            "original_text": text,
+            "translated_text": translated_text,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "explanation": explanation
+        }
+    })
+    print(f"[WS Translation] Broadcasted: {text} -> {translated_text}")
+
