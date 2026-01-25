@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.infra.db import get_db
-from app.translation.schemas import STTTranslationRequest, STTTranslationResponse
+from app.translation.schemas import STTTranslationRequest, STTTranslationResponse, DescriptionResponse
 from app.translation.deepl_service import deepl_service
+from app.translation.openai_service import openai_service
 from app.models.ai import AIEvent
 from app.models.room import Room
+from app.models.message import ChatMessage
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -86,6 +88,46 @@ async def translate_stt(
 
     except Exception as e:
         logger.error(f"STT Translation endpoint error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/description/{room_id}", response_model=DescriptionResponse)
+async def get_term_descriptions(
+    room_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get detailed explanations for difficult terms used in the meeting so far.
+    Fetches all STT data, aggregates it, and uses OpenAI to identify/explain terms.
+    """
+    try:
+        # 1. Fetch all STT data for the room
+        stmt = select(ChatMessage).where(
+            ChatMessage.room_id == room_id,
+            ChatMessage.sender_type == "transcription"
+        ).order_by(ChatMessage.seq.asc())
+        
+        result = await db.execute(stmt)
+        messages = result.scalars().all()
+        
+        if not messages:
+            return DescriptionResponse(room_id=room_id, terms=[])
+            
+        # 2. Aggregate text
+        full_text = " ".join([m.text for m in messages])
+        
+        # 3. Get descriptions from OpenAI
+        terms = await openai_service.get_description_for_terms(full_text)
+        
+        return DescriptionResponse(
+            room_id=room_id,
+            terms=terms
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in description endpoint: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)

@@ -2,7 +2,7 @@
 STT Translation Schemas
 """
 
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -33,3 +33,14 @@ class STTTranslationResponse(BaseModel):
     timestamp: str
     sequence: str
     is_final: bool
+
+
+class TermDescription(BaseModel):
+    term: str
+    explanation_ko: str
+    explanation_ja: str
+
+
+class DescriptionResponse(BaseModel):
+    room_id: str
+    terms: List[TermDescription]
