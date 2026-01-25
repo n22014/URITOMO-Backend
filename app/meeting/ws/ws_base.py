@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.token import verify_token
 from app.models.room import RoomLiveSession
 from app.meeting.ws.manager import manager
-from app.meeting.ws.ws_message import handle_chat_message
+from app.meeting.ws.ws_message import handle_chat_message, handle_stt_message
 
 from app.infra.db import AsyncSessionLocal
 
@@ -28,6 +28,12 @@ async def websocket_docs():
                     "type": "chat",
                     "text": "Hello world",
                     "lang": "ja"
+                },
+                "stt": {
+                    "type": "stt",
+                    "text": "transcribed text",
+                    "is_final": false,
+                    "lang": "ko"
                 }
             },
             "outgoing": {
@@ -96,6 +102,15 @@ async def meeting_websocket(
                     continue
                 
                 await handle_chat_message(session_id, user_id, data)
+            
+            elif msg_type == "stt":
+                if not user_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required for STT"
+                    })
+                    continue
+                await handle_stt_message(session_id, user_id, data)
             
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
