@@ -211,15 +211,101 @@ async def handle_summary_request(session_id: str, data: dict):
         print(f"[WS Summary] Summary broadcasted for session {session_id}")
 
 
+async def handle_save_transcript(session_id: str, user_id: str, data: dict):
+    """
+    Handle incoming translation/transcript log (already translated by Agent):
+    1. Save to DB (as ChatMessage with type='transcript')
+    2. Broadcast to clients
+    """
+    payload = data.get("data", {}) # Agent sends data in 'data' field
+    original_text = payload.get("original_text")
+    translated_text = payload.get("translated_text")
+    
+    if not original_text:
+        return
+
+    async with AsyncSessionLocal() as db_session:
+        # 1. Get Room Info
+        session_result = await db_session.execute(
+            select(RoomLiveSession).where(RoomLiveSession.id == session_id)
+        )
+        live_session = session_result.scalar_one_or_none()
+        if not live_session:
+            return
+        
+        room_id = live_session.room_id
+
+        # 2. Get/Create RoomMember (Agent or User)
+        # Agent usually doesn't have a user_id, so we use a system user
+        if not user_id or user_id == "agent_transcriber":
+            display_name = "Agent"
+            effective_user_id = "agent_system"
+            sender_type = "ai"
+        else:
+            display_name = user_id
+            effective_user_id = user_id
+            sender_type = "human"
+
+        member_result = await db_session.execute(
+            select(RoomMember).where(RoomMember.room_id == room_id, RoomMember.user_id == effective_user_id)
+        )
+        member = member_result.scalar_one_or_none()
+        
+        if not member:
+            member = RoomMember(
+                id=f"rm_{uuid.uuid4().hex[:16]}",
+                room_id=room_id,
+                user_id=effective_user_id,
+                display_name=display_name,
+                role="bot" if sender_type == "ai" else "member",
+                joined_at=datetime.utcnow()
+            )
+            db_session.add(member)
+            await db_session.flush()
+
+        # 3. Save as ChatMessage (type=transcript)
+        # This allows the summarization logic to pick it up easily
+        seq_result = await db_session.execute(select(func.max(ChatMessage.seq)).where(ChatMessage.room_id == room_id))
+        max_seq = seq_result.scalar() or 0
+        
+        new_message = ChatMessage(
+            id=f"trans_{uuid.uuid4().hex[:16]}",
+            room_id=room_id,
+            seq=max_seq + 1,
+            sender_type=sender_type,
+            sender_member_id=member.id,
+            message_type="transcript", # New type for voice logs
+            text=original_text,
+            lang=payload.get("source_lang", "ja"),
+            meta={"translated_text": translated_text},
+            created_at=datetime.utcnow()
+        )
+        db_session.add(new_message)
+        await db_session.commit()
+
+        # 4. Broadcast
+        # Broadcast as 'translation' type so frontend displays it in the translation tab
+        await manager.broadcast(session_id, {
+            "type": "translation",
+            "data": {
+                "id": new_message.id,
+                "original_text": original_text,
+                "translated_text": translated_text,
+                "source_lang": new_message.lang,
+                "speaker": display_name
+            }
+        })
+
+
 async def handle_translate_and_broadcast(session_id: str, text: str, source_lang: str):
     """
-    Translate text and broadcast to session
+    Translate text (from chat or manual request) and broadcast.
+    Updates the ChatMessage in DB if it relates to a chat.
     """
     from app.core.config import settings
     
-    target_lang = "en" if source_lang == "ja" else "ja" # Simple toggle for now
+    target_lang = "en" if source_lang == "ja" else "ja"
     translated_text = ""
-    explanation = ""
 
     # Mock Translation
     if settings.translation_provider == "MOCK":
@@ -230,7 +316,6 @@ async def handle_translate_and_broadcast(session_id: str, text: str, source_lang
         try:
              from openai import AsyncOpenAI
              client = AsyncOpenAI(api_key=settings.openai_api_key)
-             
              prompt = f"Translate the following text from {source_lang} to {target_lang}. Return only the translated text."
              response = await client.chat.completions.create(
                  model="gpt-4o",
@@ -240,25 +325,22 @@ async def handle_translate_and_broadcast(session_id: str, text: str, source_lang
                  ]
              )
              translated_text = response.choices[0].message.content.strip()
-             
         except Exception as e:
             print(f"[Translation Error] {e}")
             translated_text = f"[Error] {text}"
-    
     else:
-        # Fallback
         translated_text = f"[No Provider] {text}"
 
-    # Broadcast Translation
+    # Broadcast
     await manager.broadcast(session_id, {
-        "type": "translation",
+        "type": "translation_event", # Frontend handles this for popup or inline update
         "data": {
             "original_text": text,
             "translated_text": translated_text,
             "source_lang": source_lang,
-            "target_lang": target_lang,
-            "explanation": explanation
+            "target_lang": target_lang
         }
     })
-    print(f"[WS Translation] Broadcasted: {text} -> {translated_text}")
+    
+    return translated_text
 

@@ -14,7 +14,8 @@ async def fetch_meeting_transcript(db: AsyncSession, room_id: str) -> List[Dict[
         select(ChatMessage)
         .options(selectinload(ChatMessage.sender_member))
         .where(ChatMessage.room_id == room_id)
-        .where(ChatMessage.sender_type == "human")  # 人間の発言のみ
+        # 要約対象は音声認識ログ(transcript)のみに変更
+        .where(ChatMessage.message_type == "transcript")
         .order_by(ChatMessage.created_at)
     )
     result = await db.execute(stmt)
@@ -22,13 +23,18 @@ async def fetch_meeting_transcript(db: AsyncSession, room_id: str) -> List[Dict[
     
     transcript = []
     for msg in messages:
-        sender_name = msg.sender_member.display_name if msg.sender_member else "System"
+        sender_name = msg.sender_member.display_name if msg.sender_member else "Unknown"
+        translated_text = msg.meta.get("translated_text", "") if msg.meta else ""
+        
+        # 音声認識結果(原文)と翻訳結果を併記するとAIが理解しやすい
+        content = f"{msg.text} (Translation: {translated_text})" if translated_text else msg.text
+        
         transcript.append({
             "who": sender_name,
-            "what": msg.text,
+            "what": content,
             "when": msg.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "message_type": msg.message_type,  # text, translation, notice等
-            "original_msg_id": msg.id  # 元のメッセージIDを保持
+            "message_type": msg.message_type,
+            "original_msg_id": msg.id
         })
     return transcript
 

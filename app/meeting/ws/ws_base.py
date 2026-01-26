@@ -9,6 +9,7 @@ from app.core.token import verify_token
 from app.models.room import RoomLiveSession
 from app.meeting.ws.manager import manager
 from app.meeting.ws.ws_message import handle_chat_message, handle_summary_request, handle_translate_and_broadcast
+from app.meeting.ws.ws_ai import handle_ai_event
 
 from app.infra.db import AsyncSessionLocal
 
@@ -149,10 +150,19 @@ async def meeting_websocket(
                     )
 
             elif msg_type == "translation":
-                # For manual translation requests from UI
-                text = data.get("text")
-                if text:
-                     await handle_translate_and_broadcast(session_id, text, data.get("source_lang", "ja"))
+                # Check if it's a pre-translated log from Agent or a translation request
+                payload = data.get("data", {})
+                # If it has translated_text, it's likely a log from the agent -> Save to AIEvent
+                if isinstance(payload, dict) and (payload.get("translated_text") or payload.get("translatedText")):
+                     await handle_ai_event(session_id, user_id or "agent_transcriber", data)
+                else:
+                    # Manual Request: Translate it (Keep existing logic for backward compatibility)
+                    text = data.get("text")
+                    if text:
+                         await handle_translate_and_broadcast(session_id, text, data.get("source_lang", "ja"))
+
+            elif msg_type == "explanation":
+                 await handle_ai_event(session_id, user_id or "agent_transcriber", data)
             
             elif msg_type == "summary":
                 print(f"[WS] Summary requested by {user_id}")
