@@ -116,6 +116,7 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
+        "*", # Allow all for development
     ]
     cors_credentials: bool = True
     cors_methods: list[str] = ["*"]
