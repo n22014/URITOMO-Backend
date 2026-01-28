@@ -63,6 +63,7 @@ echo -e "\n${GREEN}==============================================${NC}"
 echo -e "${GREEN}✨ URITOMO Backend is ready!${NC}"
 echo -e "${BLUE}📍 API Base URL: ${NC} http://localhost:8000"
 echo -e "${BLUE}📍 API Specs:    ${NC} http://localhost:8000/docs"
+echo -e "${BLUE}📊 dashboard Specs:    ${NC} http://localhost:8000/dashboard/"
 if [ -n "$LAN_IP" ]; then
     echo -e "${BLUE}🌐 LAN Base URL: ${NC} http://${LAN_IP}:8000"
     echo -e "${BLUE}🌐 LAN Specs:    ${NC} http://${LAN_IP}:8000/docs"

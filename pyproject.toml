@@ -54,6 +54,7 @@ livekit = "^1.0.23"
 python-dotenv = "^1.0.0"
 tenacity = "^8.2.3"
 pytz = "^2024.1"
+streamlit = "^1.32.0"
 
 # Logging & Monitoring
 structlog = "^24.1.0"
