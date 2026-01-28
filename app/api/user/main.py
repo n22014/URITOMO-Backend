@@ -17,6 +17,7 @@ router = APIRouter()
 class UserMainInfo(BaseModel):
     display_name: str
     email: Optional[str]
+    lang: Optional[str]
 
 class FriendInfo(BaseModel):
     id: str
@@ -105,7 +106,7 @@ async def get_main_page_data(
 
         print("DEBUG: Successfully assembled MainPageResponse")
         return MainPageResponse(
-            user=UserMainInfo(display_name=user.display_name, email=user.email),
+            user=UserMainInfo(display_name=user.display_name, email=user.email, lang=user.locale),
             friend_count=total_friends,
             user_friends=friends_list,
             rooms=room_list
