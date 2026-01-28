@@ -950,7 +950,8 @@ async def connect_room(
     voice_ja: str,
     transcribe_model: str,
     output_modalities: list[str],
-    trigger_phrases: list[str],
+    trigger_phrases_ko: list[str],
+    trigger_phrases_ja: list[str],
     wake_cooldown_s: float,
     vad_threshold: float,
     vad_prefix_ms: int,
@@ -1086,7 +1087,7 @@ async def connect_room(
         model=realtime_model,
         base_url=realtime_url,
         transcribe_model=transcribe_model,
-        trigger_phrases=trigger_phrases,
+        trigger_phrases=trigger_phrases_ko,
         wake_cooldown_s=wake_cooldown_s,
         output_source=ko_source,
         voice=voice_ko,
@@ -1106,7 +1107,7 @@ async def connect_room(
         model=realtime_model,
         base_url=realtime_url,
         transcribe_model=transcribe_model,
-        trigger_phrases=trigger_phrases,
+        trigger_phrases=trigger_phrases_ja,
         wake_cooldown_s=wake_cooldown_s,
         output_source=ja_source,
         voice=voice_ja,
@@ -1176,7 +1177,8 @@ async def listen_room_events(
     voice_ja: str,
     transcribe_model: str,
     output_modalities: list[str],
-    trigger_phrases: list[str],
+    trigger_phrases_ko: list[str],
+    trigger_phrases_ja: list[str],
     wake_cooldown_s: float,
     vad_threshold: float,
     vad_prefix_ms: int,
@@ -1223,7 +1225,8 @@ async def listen_room_events(
                         voice_ja=voice_ja,
                         transcribe_model=transcribe_model,
                         output_modalities=output_modalities,
-                        trigger_phrases=trigger_phrases,
+                        trigger_phrases_ko=trigger_phrases_ko,
+                        trigger_phrases_ja=trigger_phrases_ja,
                         wake_cooldown_s=wake_cooldown_s,
                         vad_threshold=vad_threshold,
                         vad_prefix_ms=vad_prefix_ms,
@@ -1285,13 +1288,20 @@ async def main() -> None:
             "fallback to audio only to avoid API error"
         )
         output_modalities = ["audio"]
-    trigger_phrase_raw = os.getenv(
+    fallback_trigger_raw = os.getenv(
         "OPENAI_TRIGGER_PHRASES",
         "우리토모는 어떻게 생각해?,ウリトモはどう思ってる？",
     )
-    trigger_phrases = [
+    trigger_ko_raw = os.getenv("OPENAI_TRIGGER_PHRASES_KO", fallback_trigger_raw)
+    trigger_ja_raw = os.getenv("OPENAI_TRIGGER_PHRASES_JA", fallback_trigger_raw)
+    trigger_phrases_ko = [
         part.strip()
-        for part in re.split(r"[,\n、，]+", trigger_phrase_raw)
+        for part in re.split(r"[,\n、，]+", trigger_ko_raw)
+        if part.strip()
+    ]
+    trigger_phrases_ja = [
+        part.strip()
+        for part in re.split(r"[,\n、，]+", trigger_ja_raw)
         if part.strip()
     ]
     wake_cooldown_raw = os.getenv("OPENAI_WAKE_COOLDOWN_SECONDS")
@@ -1317,11 +1327,11 @@ async def main() -> None:
     if trigger_debug:
         print(
             "[REALTIME] trigger phrases loaded "
-            f"count={len(trigger_phrases)} values={trigger_phrases}"
+            f"ko={trigger_phrases_ko} ja={trigger_phrases_ja}"
         )
 
-    if not always_respond and not trigger_phrases:
-        raise RuntimeError("OPENAI_TRIGGER_PHRASES is empty")
+    if not always_respond and not (trigger_phrases_ko or trigger_phrases_ja):
+        raise RuntimeError("OPENAI_TRIGGER_PHRASES_KO/JA are empty")
 
     auto_subscribe_value = args.auto_subscribe or os.getenv("AUTO_SUBSCRIBE", "true")
     auto_subscribe = auto_subscribe_value.lower() == "true"
@@ -1358,7 +1368,8 @@ async def main() -> None:
             voice_ja=voice_ja,
             transcribe_model=transcribe_model,
             output_modalities=output_modalities,
-            trigger_phrases=trigger_phrases,
+            trigger_phrases_ko=trigger_phrases_ko,
+            trigger_phrases_ja=trigger_phrases_ja,
             wake_cooldown_s=wake_cooldown_s,
             vad_threshold=vad_threshold,
             vad_prefix_ms=vad_prefix_ms,
@@ -1387,7 +1398,8 @@ async def main() -> None:
         voice_ja=voice_ja,
         transcribe_model=transcribe_model,
         output_modalities=output_modalities,
-        trigger_phrases=trigger_phrases,
+        trigger_phrases_ko=trigger_phrases_ko,
+        trigger_phrases_ja=trigger_phrases_ja,
         wake_cooldown_s=wake_cooldown_s,
         vad_threshold=vad_threshold,
         vad_prefix_ms=vad_prefix_ms,
