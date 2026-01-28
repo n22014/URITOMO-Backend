@@ -4,7 +4,8 @@ FastAPI Application Entry Point
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 
@@ -123,6 +124,13 @@ URITOMO API provides real-time translation with cultural context explanations.
             "status": "operational"
         }
 
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/dashboard/", include_in_schema=False)
+    async def dashboard_redirect(request: Request):
+        host = request.headers.get("host", "localhost:8000")
+        hostname = host.split(":")[0]
+        target = f"http://{hostname}:8501/dashboard"
+        return RedirectResponse(url=target, status_code=307)
 
     # Routes
 

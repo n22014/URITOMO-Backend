@@ -141,6 +141,35 @@ services:
     networks:
       - uritomo_network
 
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: uritomo_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-uritomo_user}:${MYSQL_PASSWORD:-uritomo_pass}@mysql:3306/${MYSQL_DATABASE:-uritomo}
+      ENV: ${ENV:-development}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: >
+      streamlit run app/dashboard/data_app.py
+      --server.baseUrlPath dashboard
+      --server.port 8501
+      --server.headless true
+      --server.address 0.0.0.0
+    networks:
+      - uritomo_network
+
   # Background Worker for async jobs
   worker:
     build:
