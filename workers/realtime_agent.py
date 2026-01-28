@@ -4,6 +4,7 @@ import base64
 import inspect
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -593,7 +594,10 @@ class RealtimeSession:
     def _contains_trigger_phrase(self, text: str) -> bool:
         normalized = self._normalize_text(text)
         for phrase, norm in zip(self._trigger_phrases, self._trigger_norm, strict=False):
-            if phrase in text or norm in normalized:
+            if not norm:
+                continue
+            # Raw contains OR normalized contains (both directions to tolerate shorter utterances)
+            if phrase in text or norm in normalized or normalized in norm:
                 return True
         return False
 
@@ -812,20 +816,11 @@ async def maybe_await(result) -> None:
         await result
 
 
-def compute_active_langs(room: rtc.Room, unknown_policy: str) -> set[str]:
-    langs: set[str] = set()
-    for participant in room.remote_participants.values():
-        lang = normalize_lang((participant.attributes or {}).get("lang"))
-        if lang:
-            langs.add(lang)
-            continue
-        if unknown_policy == "ko":
-            langs.add("ko")
-        elif unknown_policy == "ja":
-            langs.add("ja")
-        elif unknown_policy == "both":
-            langs.update({"ko", "ja"})
-    return langs
+def resolve_target_langs(participant_lang: Optional[str], unknown_policy: str) -> set[str]:
+    lang = normalize_lang(participant_lang)
+    if lang in {"ko", "ja"}:
+        return {lang}
+    return set()
 
 
 async def consume_audio(
@@ -867,18 +862,18 @@ async def consume_audio(
                 state=resample_state,
             )
 
-            active_langs = compute_active_langs(state.room, unknown_policy)
-            state.active_langs = active_langs
-            if not active_langs:
+            target_langs = resolve_target_langs(participant_lang, unknown_policy)
+            state.active_langs = target_langs
+            if not target_langs:
                 now = time.time()
                 if now - last_empty_log >= 5.0:
                     print(f"[AUDIO] {label} no active_langs (unknown_policy={unknown_policy})")
                     last_empty_log = now
 
-            if "ko" in active_langs and state.realtime_ko:
+            if "ko" in target_langs and state.realtime_ko:
                 state.realtime_ko.note_speaker(participant_identity, participant_name, participant_lang)
                 state.realtime_ko.send_audio(data)
-            if "ja" in active_langs and state.realtime_ja:
+            if "ja" in target_langs and state.realtime_ja:
                 state.realtime_ja.note_speaker(participant_identity, participant_name, participant_lang)
                 state.realtime_ja.send_audio(data)
 
@@ -886,7 +881,7 @@ async def consume_audio(
             now = time.time()
             if now - last_report >= 5.0:
                 fps = frames / (now - last_report)
-                print(f"[AUDIO] {label} fps={fps:.1f} active_langs={sorted(active_langs)}")
+                print(f"[AUDIO] {label} fps={fps:.1f} active_langs={sorted(target_langs)}")
                 frames = 0
                 last_report = now
     except asyncio.CancelledError:
@@ -1294,7 +1289,11 @@ async def main() -> None:
         "OPENAI_TRIGGER_PHRASES",
         "우리토모는 어떻게 생각해?,ウリトモはどう思ってる？",
     )
-    trigger_phrases = [part.strip() for part in trigger_phrase_raw.split(",") if part.strip()]
+    trigger_phrases = [
+        part.strip()
+        for part in re.split(r"[,\n、，]+", trigger_phrase_raw)
+        if part.strip()
+    ]
     wake_cooldown_raw = os.getenv("OPENAI_WAKE_COOLDOWN_SECONDS")
     wake_cooldown_s = float(wake_cooldown_raw or "2.0")
     always_respond_value = os.getenv("OPENAI_ALWAYS_RESPOND", "false")
@@ -1314,6 +1313,12 @@ async def main() -> None:
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
     trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
+
+    if trigger_debug:
+        print(
+            "[REALTIME] trigger phrases loaded "
+            f"count={len(trigger_phrases)} values={trigger_phrases}"
+        )
 
     if not always_respond and not trigger_phrases:
         raise RuntimeError("OPENAI_TRIGGER_PHRASES is empty")
