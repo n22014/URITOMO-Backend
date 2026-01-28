@@ -11,6 +11,9 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}🚀 Starting URITOMO Backend services...${NC}"
 
+# 0. Clean removed LiveKit worker containers (if they still exist)
+docker-compose rm -sf livekit_publisher livekit_sniffer >/dev/null 2>&1
+
 # 1. Start Docker containers in background
 # --build: Ensures changes to Dockerfile or app code are reflected
 docker-compose up -d --build
