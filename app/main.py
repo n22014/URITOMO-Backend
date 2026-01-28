@@ -4,7 +4,7 @@ FastAPI Application Entry Point
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
@@ -75,6 +75,14 @@ tags_metadata = [
 ]
 
 
+class RawASGIMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            print(f"\n[RAW-WS-INCOMING] Path: {scope.get('path')} | Origin: {dict(scope.get('headers', [])).get(b'origin', b'none').decode()}")
+        return await self.app(scope, receive, send)
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="URITOMO Backend",
@@ -99,24 +107,49 @@ URITOMO API provides real-time translation with cultural context explanations.
         lifespan=lifespan,
     )
 
+    # --- Debugging Middlewares (Lowest Level) ---
+    app.add_middleware(RawASGIMiddleware)
 
     # Middleware
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIDMiddleware)
     
-    # Handle CORS
-    # Handle CORS
-    # Note: allow_origins=["*"] cannot be used with allow_credentials=True
-    # Using allow_origin_regex to allow any origin with credentials for development
+    # CORS Configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=".*",
+        allow_origin_regex=".*", 
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    # Connection Test Ping
+    @app.get("/ws-test-ping")
+    @app.get(f"{settings.api_prefix}/ws-test-ping")
+    async def ws_test_ping():
+        return {
+            "status": "ok", 
+            "message": "MAGIC_WS_PONG_2026", 
+            "hint": "If you see this, code IS syncing!"
+        }
+
+    # Debug WebSocket Test (Unique path to avoid conflict)
+    @app.websocket("/debug-ws-test")
+    async def websocket_debug_test(websocket: WebSocket):
+        await websocket.accept()
+        await websocket.send_json({"message": "If you see this, WebSocket works!"})
+        await websocket.close()
+
     # Root Route
+    @app.get("/debug/ping", tags=["debug"])
+    async def debug_ping(request: Request):
+        return {
+            "status": "ok",
+            "message": "Backend version 0.1.1 (WS-Fix-Applied)",
+            "headers": dict(request.headers),
+            "cors_origins": settings.cors_origins
+        }
+
     @app.get("/", tags=["health"], include_in_schema=False)
     async def root():
         return {
@@ -137,6 +170,11 @@ URITOMO API provides real-time translation with cultural context explanations.
 
     # We include dependencies=[Depends(HTTPBearer())] if we want to FORCE it everywhere globally.
     # But usually, it's better to apply it to the main api_router.
+    # Routes
+    # WebSocket Router (Bypass api_prefix, mounted directly, HIGH PRIORITY)
+    from app.meeting.ws.ws_base import router as meeting_ws_router
+    app.include_router(meeting_ws_router)
+
     # Routes
     app.include_router(api_router, prefix=settings.api_prefix)
 

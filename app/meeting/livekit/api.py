@@ -99,7 +99,7 @@ async def create_livekit_token(
             .with_grants(grants)
             .with_ttl(timedelta(seconds=3600))
             .with_name(display_name)
-            .with_attributes(attributes)
+            # .with_attributes(attributes)
         )
 
         jwt = token_builder.to_jwt()
@@ -140,7 +140,7 @@ async def create_livekit_token(
         .with_grants(grants)
         .with_ttl(timedelta(seconds=3600))
         .with_name(member.display_name)
-        .with_attributes(attributes)
+        # .with_attributes(attributes)
     )
 
     jwt = token_builder.to_jwt()

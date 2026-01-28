@@ -18,63 +18,63 @@ router = APIRouter(prefix="/meeting", tags=["websocket"])
 @router.websocket("/{session_id}")
 async def meeting_websocket(
     websocket: WebSocket,
-    session_id: str,
-    token: Optional[str] = Query(None)
+    session_id: str
 ):
     """
     WebSocket endpoint for a live meeting session.
-    Path: /meeting/{session_id}
+    Accepts first for debuggability, then strictly validates.
     """
-    # 1. Authenticate (optional but recommended for chat)
-    user_id = None
-    if token:
-        user_id = verify_token(token)
+    # 1. 接続を一旦確立 (403を回避し、エラー内容をブラウザに送れるようにするため)
+    await websocket.accept()
     
-    # 2. Check if session exists
-    # 2. Check if session exists (Try-Catch to prevent connection failure on DB error)
+    headers = dict(websocket.headers)
+    origin = headers.get("origin", "unknown")
+    token = websocket.query_params.get("token")
+    
+    print(f"[WS Debug] Connection established. Session: {session_id} | Origin: {origin}")
+
+    # 2. 認証チェック (トークンの検証)
+    user_id = None
+    if not token:
+        await websocket.send_json({"type": "error", "code": "AUTH_REQUIRED", "message": "Authentication token missing"})
+        await websocket.close(code=1008)
+        return
+
+    try:
+        user_id = verify_token(token)
+        if not user_id:
+             await websocket.send_json({"type": "error", "code": "AUTH_FAILED", "message": "Invalid or expired token"})
+             await websocket.close(code=1008)
+             return
+    except Exception as e:
+        await websocket.send_json({"type": "error", "code": "AUTH_ERROR", "message": str(e)})
+        await websocket.close(code=1008)
+        return
+
+    # 3. セッション存在チェック (データベース)
     try:
         async with AsyncSessionLocal() as db_session:
             result = await db_session.execute(
                 select(RoomLiveSession).where(RoomLiveSession.id == session_id)
             )
             live_session = result.scalar_one_or_none()
-    
+            
             if not live_session:
-                # await websocket.close(code=1008) # Policy Violation
-                # return
-                
-                # 開発用: セッションがなければ自動作成する
-                # まずRoomがあるか確認
-                from app.models.room import Room
-                room_result = await db_session.execute(select(Room).where(Room.id == session_id)) # 簡易的にsession_id = room_idとする
-                room = room_result.scalar_one_or_none()
-                
-                if not room:
-                     print(f"[WS] Auto-creating Room {session_id}")
-                     room = Room(
-                         id=session_id, 
-                         title=f"Room {session_id}", 
-                         created_at=datetime.utcnow(),
-                         created_by="system" # 必須カラム
-                     )
-                     db_session.add(room)
-                
-                print(f"[WS] Auto-creating LiveSession {session_id}")
-                live_session = RoomLiveSession(
-                    id=session_id, 
-                    room_id=session_id, 
-                    title=f"Session {session_id}", 
-                    started_at=datetime.utcnow(),
-                    status="active"
-                )
-                db_session.add(live_session)
-                await db_session.commit()
+                await websocket.send_json({
+                    "type": "error", 
+                    "code": "SESSION_NOT_FOUND", 
+                    "message": f"Session {session_id} is not registered in the system. Use startLiveSession API first."
+                })
+                await websocket.close(code=1008)
+                return
     except Exception as db_err:
-        print(f"[WS Warning] DB Session check failed for {session_id}: {db_err}")
-        # DBなしでもチャット機能自体はオンメモリで動くので続行する
+        await websocket.send_json({"type": "error", "code": "DB_ERROR", "message": f"Database check failed: {db_err}"})
+        await websocket.close(code=1008)
+        return
 
-    # 3. Handle connection via manager
-    await manager.connect(session_id, websocket, user_id)
+    # --- すべてのチェックを通過 ---
+    await manager.add_connection(session_id, websocket, user_id)
+    print(f"[WS Success] User {user_id} joined session {session_id}")
     
     try:
         # Send initial success message

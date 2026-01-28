@@ -14,6 +14,9 @@ class ConnectionManager:
 
     async def connect(self, session_id: str, websocket: WebSocket, user_id: str = None):
         await websocket.accept()
+        await self.add_connection(session_id, websocket, user_id)
+
+    async def add_connection(self, session_id: str, websocket: WebSocket, user_id: str = None):
         if session_id not in self.active_sessions:
             self.active_sessions[session_id] = []
             self.session_users[session_id] = set()
@@ -22,7 +25,7 @@ class ConnectionManager:
         if user_id:
             self.session_users[session_id].add(user_id)
             
-        logger.info(f"WS Connected | Session: {session_id} | User: {user_id} | Total Connections in Session: {len(self.active_sessions[session_id])}")
+        logger.info(f"WS Registered | Session: {session_id} | User: {user_id} | Total Connections in Session: {len(self.active_sessions[session_id])}")
 
     def disconnect(self, session_id: str, websocket: WebSocket, user_id: str = None):
         if session_id in self.active_sessions:

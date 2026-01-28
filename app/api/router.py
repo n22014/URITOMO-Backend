@@ -38,7 +38,6 @@ api_router.include_router(profile_router, dependencies=[Depends(security_scheme)
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(livekit_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(meeting_ws_router)
 
 
 # 3. Summary Routes (Protected)

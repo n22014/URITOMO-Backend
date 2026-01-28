@@ -130,7 +130,7 @@ class RequestLoggingMiddleware:
         self.logger = get_logger("app.request")
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
 
@@ -138,13 +138,16 @@ class RequestLoggingMiddleware:
         status_code = None
         client = scope.get("client") or (None, None)
         query_string = scope.get("query_string", b"").decode("utf-8")
-
+        path = scope.get("path")
+        
         self.logger.info(
             "request.start",
-            method=scope.get("method"),
-            path=scope.get("path"),
+            type=scope.get("type"),
+            method=scope.get("method", "WS"),
+            path=path,
             query_string=query_string,
             client_host=client[0],
+            origin=dict(scope.get("headers", [])).get(b"origin", b"").decode()
         )
 
         async def send_with_status(message):
