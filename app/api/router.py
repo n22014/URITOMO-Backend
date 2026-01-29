@@ -37,6 +37,7 @@ api_router.include_router(room_detail_router, dependencies=[Depends(security_sch
 api_router.include_router(room_create_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(profile_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
