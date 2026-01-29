@@ -9,12 +9,13 @@ from sqlalchemy import select
 from app.core.token import verify_token
 from app.models.room import Room
 from app.meeting.ws.manager import manager
-from app.meeting.ws.ws_message import handle_chat_message
+from app.meeting.ws.ws_message import handle_chat_message, handle_stt_message
 
 from app.infra.db import AsyncSessionLocal
 
 router = APIRouter(prefix="/meeting", tags=["websocket"])
 logger = logging.getLogger("uritomo.ws")
+
 
 @router.websocket("/{room_id}")
 async def meeting_websocket(
@@ -93,6 +94,15 @@ async def meeting_websocket(
                     continue
                 
                 await handle_chat_message(room_id, user_id, data)
+            
+            elif msg_type == "stt":
+                if not user_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required for STT"
+                    })
+                    continue
+                await handle_stt_message(session_id, user_id, data)
             
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
