@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 
 from app.infra.db import get_db
 from app.models import (
-    User, Room, RoomMember, ChatMessage, Live, AIEvent,
+    User, Room, RoomMember, ChatMessage, AIEvent,
     UserFriend, DmThread, DmParticipant, DmMessage,
     RoomLiveSession, RoomLiveSessionMember, AuthToken
 )
@@ -72,7 +72,7 @@ async def clear_all_data(db: AsyncSession = Depends(get_db)):
     await db.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
     
     tables = [
-        "ai_events", "live", "chat_messages", 
+        "ai_events", "chat_messages", 
         "room_live_session_members", "room_live_sessions", 
         "room_members", "rooms", 
         "dm_messages", "dm_participants", "dm_threads", 
