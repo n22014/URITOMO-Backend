@@ -671,11 +671,44 @@ class RealtimeSession:
                     self._member_cache[speaker_id] = member_id
 
                 if not member_id:
-                    print(
-                        f"[STT] save skipped room_id={self.room_id} "
-                        f"reason=no_member speaker_id={speaker_id}"
+                    new_member = RoomMember(
+                        id=f"member_{uuid.uuid4().hex[:16]}",
+                        room_id=self.room_id,
+                        user_id=speaker_id,
+                        display_name=self._last_speaker_name or "Guest",
+                        role="member",
+                        joined_at=datetime.utcnow(),
+                        client_meta={
+                            "source": "realtime_agent",
+                            "speaker_identity": speaker_id,
+                        },
                     )
-                    return
+                    session.add(new_member)
+                    try:
+                        await session.commit()
+                        member_id = new_member.id
+                        self._member_cache[speaker_id] = member_id
+                        print(
+                            "🧾 [STT] created room_member "
+                            f"room_id={self.room_id} member_id={member_id} speaker_id={speaker_id}"
+                        )
+                    except IntegrityError:
+                        await session.rollback()
+                        result = await session.execute(
+                            select(RoomMember).where(
+                                RoomMember.room_id == self.room_id,
+                                RoomMember.user_id == speaker_id,
+                            )
+                        )
+                        member = result.scalar_one_or_none()
+                        member_id = member.id if member else None
+                        self._member_cache[speaker_id] = member_id
+                    if not member_id:
+                        print(
+                            f"[STT] save skipped room_id={self.room_id} "
+                            f"reason=no_member speaker_id={speaker_id}"
+                        )
+                        return
 
                 for _ in range(3):
                     seq_result = await session.execute(
