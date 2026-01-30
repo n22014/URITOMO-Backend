@@ -1,13 +1,12 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from uuid import uuid4
-from datetime import datetime
 
 from livekit import api as lk_api
+import uuid
 
 from app.core.config import settings
 from app.core.deps import SessionDep, RedisDep
@@ -15,7 +14,7 @@ from app.core.errors import AppError, NotFoundError, PermissionError
 from app.core.logging import get_logger
 from app.core.token import CurrentUserDep, decode_token
 from app.meeting.livekit.events import publish_room_event
-from app.models.room import Room, RoomMember
+from app.models.room import Room, RoomMember, RoomLiveSession, RoomLiveSessionMember
 from app.models.user import User
 
 router = APIRouter(prefix="/meeting/livekit", tags=["meetings"])
@@ -115,30 +114,59 @@ async def create_livekit_token(
         )
     )
     member = member_result.scalar_one_or_none()
-    
-    # Auto-add member if they are the creator (just in case membership creation failed or race condition)
-    if not member and room.created_by == current_user_id:
-        new_member = RoomMember(
-             id=f"member_{uuid4().hex}",
-             room_id=data.room_id,
-             user_id=current_user_id,
-             display_name="Owner",
-             role="owner",
-             joined_at=datetime.utcnow()
-        )
-        session.add(new_member)
-        await session.commit()
-        member = new_member
-    
     if not member:
-        # For open rooms, we might want to allow auto-join
-        # But for now, let's keep it strict but informative
         raise PermissionError("Not a member of this room")
 
     user_result = await session.execute(select(User).where(User.id == current_user_id))
     user = user_result.scalar_one_or_none()
     if not user:
         raise PermissionError("User not found")
+
+    # Ensure active live session exists for this room
+    session_result = await session.execute(
+        select(RoomLiveSession)
+        .where(
+            RoomLiveSession.room_id == data.room_id,
+            RoomLiveSession.status == "active",
+        )
+        .order_by(RoomLiveSession.started_at.desc())
+    )
+    live_session = session_result.scalars().first()
+    if not live_session:
+        live_session = RoomLiveSession(
+            id=f"ls_{uuid.uuid4().hex[:16]}",
+            room_id=data.room_id,
+            title=f"{room.title} - Session" if room.title else "Live Session",
+            status="active",
+            started_by=current_user_id,
+            started_at=datetime.utcnow(),
+        )
+        session.add(live_session)
+
+    part_result = await session.execute(
+        select(RoomLiveSessionMember).where(
+            RoomLiveSessionMember.session_id == live_session.id,
+            RoomLiveSessionMember.user_id == current_user_id,
+        )
+    )
+    existing_member = part_result.scalar_one_or_none()
+    if not existing_member:
+        session_member = RoomLiveSessionMember(
+            id=f"lsm_{uuid.uuid4().hex[:16]}",
+            session_id=live_session.id,
+            room_id=data.room_id,
+            member_id=member.id,
+            user_id=current_user_id,
+            display_name=member.display_name,
+            role=member.role,
+            joined_at=datetime.utcnow(),
+        )
+        session.add(session_member)
+    else:
+        existing_member.left_at = None
+        existing_member.joined_at = datetime.utcnow()
+
+    await session.commit()
 
     grants = lk_api.VideoGrants(
         room_join=True,
@@ -170,6 +198,7 @@ async def create_livekit_token(
                 redis,
                 action="join",
                 room_id=data.room_id,
+                session_id=live_session.id,
                 user_id=current_user_id,
             )
         except Exception as exc:

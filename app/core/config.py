@@ -33,20 +33,9 @@ class Settings(BaseSettings):
     api_prefix: str = ""
 
     # Database
-    # Database
-    mysql_user: str = "uritomo_user"
-    mysql_password: str = "uritomo_pass"
-    mysql_host: str = "localhost"
-    mysql_port: int = 3306
-    mysql_db: str = "uritomo"
-
-    database_url: Optional[str] = None
-    
-    @validator("database_url", pre=True, always=True)
-    def assemble_db_url(cls, v: Optional[str], values: dict) -> str:
-        if isinstance(v, str):
-            return v
-        return f"mysql+aiomysql://{values.get('mysql_user')}:{values.get('mysql_password')}@{values.get('mysql_host')}:{values.get('mysql_port')}/{values.get('mysql_db')}"
+    database_url: str = Field(
+        default="mysql+aiomysql://uritomo_user:uritomo_pass@localhost:3306/uritomo"
+    )
     db_echo: bool = False
     db_pool_size: int = 20
     db_max_overflow: int = 40
@@ -73,11 +62,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
-    refresh_token_expire_days: int = 7
+    refresh_token_expire_minutes: int = 30
 
     # External APIs
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-5-nano"
+    openai_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
 
     deepl_api_key: Optional[str] = None
@@ -127,7 +116,6 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
-        "*", # Allow all for development
     ]
     cors_credentials: bool = True
     cors_methods: list[str] = ["*"]

@@ -20,9 +20,7 @@ from app.core.errors import (
     validation_exception_handler,
     general_exception_handler,
 )
-from app.meeting.ws.ws_base import router as meeting_ws_router
-from app.meeting.ws.stt_listener import start_stt_translation_listener, stop_stt_translation_listener
-from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware
+from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware, WebSocketLoggingMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
 from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
@@ -44,14 +42,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         # Don't fail startup if qdrant is down, but log it
         print(f"Warning: Failed to initialize Qdrant collections: {e}")
-    
-    # Start STT translation listener for real-time speech translation
-    await start_stt_translation_listener()
         
     yield
     
     # Shutdown
-    await stop_stt_translation_listener()
     await close_redis_pool()
     await close_qdrant_client()
     await close_db_connection()
@@ -109,17 +103,17 @@ URITOMO API provides real-time translation with cultural context explanations.
     # Middleware
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(WebSocketLoggingMiddleware)
     
     # Handle CORS
-    # Handle CORS
     # Note: allow_origins=["*"] cannot be used with allow_credentials=True
-    # Using allow_origin_regex to allow any origin with credentials for development
+    allow_all_origins = "*" in settings.cors_origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=".*",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=settings.cors_origins,
+        allow_credentials=settings.cors_credentials if not allow_all_origins else False,
+        allow_methods=settings.cors_methods,
+        allow_headers=settings.cors_headers,
     )
 
     # Root Route
@@ -145,8 +139,6 @@ URITOMO API provides real-time translation with cultural context explanations.
     # But usually, it's better to apply it to the main api_router.
     # Routes
     app.include_router(api_router, prefix=settings.api_prefix)
-    # WebSocket route without api_prefix
-    app.include_router(meeting_ws_router)
 
     # Exception Handlers
     app.add_exception_handler(AppError, app_exception_handler)
