@@ -71,7 +71,11 @@ async def clear_all_data(db: AsyncSession = Depends(get_db)):
     # Disable foreign key checks for easy deletion
     await db.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
     
-    tables = [table.name for table in Base.metadata.sorted_tables]
+    tables = [
+        table.name
+        for table in Base.metadata.sorted_tables
+        if table.name != "alembic_version"
+    ]
     for table in tables:
         await db.execute(text(f"TRUNCATE TABLE `{table}`"))
         
