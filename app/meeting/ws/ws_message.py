@@ -9,6 +9,7 @@ from app.models.room import RoomMember
 from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
+from app.translation.openai_service import openai_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,6 +39,41 @@ def _normalize_lang(lang: Optional[str]) -> str:
     if lang_lower in {"ja", "jp", "japanese"}:
         return "Japanese"
     return lang
+
+def _looks_like_mock(text: Optional[str]) -> bool:
+    if not text:
+        return True
+    return (
+        text.startswith("[KO]")
+        or text.startswith("[JA]")
+        or text.startswith("[TRANS]")
+        or text.startswith("[Korean]")
+        or text.startswith("[Japanese]")
+    )
+
+async def _translate_with_fallback(text: str, source_lang: str, target_lang: str) -> Optional[str]:
+    translated_text: Optional[str] = None
+    if deepl_service.enabled:
+        try:
+            translated_text = deepl_service.translate_text(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        except Exception:
+            translated_text = None
+    if _looks_like_mock(translated_text):
+        try:
+            translated_text = await openai_service.translate_text(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        except Exception:
+            pass
+    if _looks_like_mock(translated_text):
+        return None
+    return translated_text
 
 async def handle_chat_message(room_id: str, user_id: str, data: dict):
     """
@@ -86,6 +122,8 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
             message_type="text",
             text=text,
             lang=source_lang,
+            translated_text=None,
+            translated_lang=None,
             created_at=datetime.utcnow()
         )
 
@@ -98,10 +136,10 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         translated_text: Optional[str] = None
 
         try:
-            translated_text = deepl_service.translate_text(
+            translated_text = await _translate_with_fallback(
                 text=text,
                 source_lang=source_lang,
-                target_lang=target_lang
+                target_lang=target_lang,
             )
             
             # 7. Save Translation Event
@@ -143,7 +181,9 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 },
                 created_at=datetime.utcnow()
             )
-            
+
+            new_message.translated_text = translated_text
+            new_message.translated_lang = target_lang
             db_session.add(ai_event)
             await db_session.commit()
             
@@ -161,8 +201,8 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 "display_name": member.display_name,
                 "text": new_message.text,
                 "lang": new_message.lang,
-                "translated_text": translated_text,
-                "translated_lang": target_lang if translated_text else None,
+                "translated_text": new_message.translated_text,
+                "translated_lang": new_message.translated_lang,
                 "created_at": new_message.created_at.isoformat()
             }
         }
@@ -239,6 +279,8 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
             message_type="text",
             text=text,
             lang=source_lang,
+            translated_text=None,
+            translated_lang=None,
             created_at=datetime.utcnow()
         )
 
@@ -292,6 +334,8 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 created_at=datetime.utcnow()
             )
             
+            new_message.translated_text = translated_text
+            new_message.translated_lang = target_lang
             db_session.add(ai_event)
             await db_session.commit()
             
