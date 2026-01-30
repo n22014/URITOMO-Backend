@@ -15,124 +15,126 @@ from app.infra.db import AsyncSessionLocal
 
 router = APIRouter(prefix="/meeting", tags=["websocket"])
 
-@router.websocket("/{session_id}")
+@router.websocket("/{room_id}")
 async def meeting_websocket(
     websocket: WebSocket,
-    session_id: str,
+    room_id: str,
     token: Optional[str] = Query(None)
 ):
     """
     WebSocket endpoint for a live meeting session.
-    Path: /meeting/{session_id}
+    Path: /meeting/{room_id}
     """
     # 1. Authenticate (optional but recommended for chat)
     user_id = None
     if token:
         user_id = verify_token(token)
     
-    # 2. Check if session exists
-    # 2. Check if session exists (Try-Catch to prevent connection failure on DB error)
+    print(f"🔌 WS Connection Attempt | Room: {room_id} | User: {user_id or 'Anonymous'}")
+    
+    # 2. Check if room exists
+    # Use room_id to check RoomLiveSession (in this app, typically room_id and session_id are reused)
     try:
         async with AsyncSessionLocal() as db_session:
+            # First, check if the room exists
+            from app.models.room import Room
+            room_stmt = select(Room).where(Room.id == room_id)
+            room_result = await db_session.execute(room_stmt)
+            room = room_result.scalar_one_or_none()
+
+            if not room:
+                print(f"[WS] Room {room_id} not found. Closing with 1008.")
+                await websocket.close(code=1008)
+                return
+
+            # Check for active session
             result = await db_session.execute(
-                select(RoomLiveSession).where(RoomLiveSession.id == session_id)
+                select(RoomLiveSession).where(RoomLiveSession.room_id == room_id, RoomLiveSession.status == "active")
             )
             live_session = result.scalar_one_or_none()
-    
-            if not live_session:
-                # await websocket.close(code=1008) # Policy Violation
-                # return
-                
-                # 開発用: セッションがなければ自動作成する
-                # まずRoomがあるか確認
-                from app.models.room import Room
-                room_result = await db_session.execute(select(Room).where(Room.id == session_id)) # 簡易的にsession_id = room_idとする
-                room = room_result.scalar_one_or_none()
-                
-                if not room:
-                     print(f"[WS] Auto-creating Room {session_id}")
-                     room = Room(
-                         id=session_id, 
-                         title=f"Room {session_id}", 
-                         created_at=datetime.utcnow(),
-                         created_by="system" # 必須カラム
-                     )
-                     db_session.add(room)
-                
-                print(f"[WS] Auto-creating LiveSession {session_id}")
-                live_session = RoomLiveSession(
-                    id=session_id, 
-                    room_id=session_id, 
-                    title=f"Session {session_id}", 
-                    started_at=datetime.utcnow(),
-                    status="active"
-                )
-                db_session.add(live_session)
-                await db_session.commit()
+            
+            # For this spec, we consider room_id as the primary identifier. 
+            # If no active session, we might want to fail or auto-create depending on environment.
+            # Spec says "room_id가 없거나 잘못되면 종료", so we focus on room check.
+            session_id = live_session.id if live_session else room_id
+
     except Exception as db_err:
-        print(f"[WS Warning] DB Session check failed for {session_id}: {db_err}")
-        # DBなしでもチャット機能自体はオンメモリで動くので続行する
+        print(f"[WS Warning] DB check failed for {room_id}: {db_err}")
+        # In case of DB failure, if we want to be strict, we'd close, 
+        # but for robustness during development, we use room_id as session_id
+        session_id = room_id
 
     # 3. Handle connection via manager
     await manager.connect(session_id, websocket, user_id)
     
     try:
-        # Send initial success message
+        # Send initial success message (Spec: room_connected)
         await websocket.send_json({
-            "type": "session_connected",
+            "type": "room_connected",
             "data": {
-                "session_id": session_id,
+                "room_id": room_id,
                 "user_id": user_id
             }
         })
 
         while True:
-            # Receive message from client
             try:
                 data = await websocket.receive_json()
+                msg_type = data.get("type")
+                # print(f"📥 Received: {msg_type} from {user_id or 'Anonymous'}")
             except Exception:
-                # Invalid JSON
                 break
             
             msg_type = data.get("type")
             
             if msg_type == "chat":
+                # Spec: token 없거나 유효하지 않으면 chat 요청은 에러 응답
                 if not user_id:
-                    # await websocket.send_json({
-                    #     "type": "error",
-                    #     "message": "Authentication required for chat"
-                    # })
-                    # continue
-                    
-                    # 開発用: 認証なしでもチャット可能にする
-                    user_id = f"debug_user_{session_id[-6:]}"
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required for chat"
+                    })
+                    continue
                 
+                # Spec: text 비어 있으면 서버가 무시
+                text = data.get("text")
+                if not text or not text.strip():
+                    continue
+
+                # Spec: token 유효하지만 room 멤버가 아니면 chat 요청은 무시됨
+                async with AsyncSessionLocal() as db_session:
+                    from app.models.room import RoomMember
+                    member_stmt = select(RoomMember).where(RoomMember.room_id == room_id, RoomMember.user_id == user_id)
+                    member_result = await db_session.execute(member_stmt)
+                    if not member_result.scalar_one_or_none():
+                        print(f"[WS] User {user_id} is not a member of room {room_id}. Ignoring chat.")
+                        continue
+
                 # Save and Broadcast Chat
+                print(f"💬 Chat from {user_id}: {text[:50]}{'...' if len(text) > 50 else ''}")
                 await handle_chat_message(session_id, user_id, data)
                 
-                # Trigger Translation (Fire and Forget or Background Task)
-                # Note: data.get("text") should exist if handle_chat_message succeeded conceptually, 
-                # but better safely access it.
-                chat_text = data.get("text")
-                if chat_text:
-                    import asyncio
-                    # Run translation in background relative to WS loop response
-                    asyncio.create_task(
-                         handle_translate_and_broadcast(
-                             session_id, 
-                             chat_text, 
-                             data.get("lang", "ja")
-                         )
-                    )
+                # Background Translation
+                import asyncio
+                asyncio.create_task(
+                     handle_translate_and_broadcast(
+                         session_id, 
+                         text, 
+                         data.get("lang", "Korean")
+                     )
+                )
+
+            elif msg_type == "ping":
+                # Spec: pong
+                # print(f"🏓 Ping from {user_id or 'Anonymous'}")
+                await websocket.send_json({"type": "pong"})
 
             elif msg_type == "translation":
-                # Check if it's a pre-translated log from Agent or a translation request
+                # (Existing logic for internal translation events)
                 payload = data.get("data", {})
-                # If it has translated_text, it's likely a log from the agent -> Save to AIEvent
                 if isinstance(payload, dict) and (payload.get("translated_text") or payload.get("translatedText")):
                      await handle_ai_event(session_id, user_id or "agent_transcriber", data)
                 else:
-                    # Manual Request: Translate it (Keep existing logic for backward compatibility)
                     text = data.get("text")
                     if text:
                          await handle_translate_and_broadcast(session_id, text, data.get("source_lang", "ja"))
@@ -141,14 +143,10 @@ async def meeting_websocket(
                  await handle_ai_event(session_id, user_id or "agent_transcriber", data)
             
             elif msg_type == "summary":
-                print(f"[WS] Summary requested by {user_id}")
                 await handle_summary_request(session_id, data)
-
-            elif msg_type == "ping":
-                await websocket.send_json({"type": "pong"})
             
             else:
-                # Default echo or unknown type
+                # Spec: unknown_type
                 await websocket.send_json({
                     "type": "unknown_type",
                     "received": data

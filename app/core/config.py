@@ -33,9 +33,20 @@ class Settings(BaseSettings):
     api_prefix: str = ""
 
     # Database
-    database_url: str = Field(
-        default="mysql+aiomysql://uritomo_user:uritomo_pass@localhost:3306/uritomo"
-    )
+    # Database
+    mysql_user: str = "uritomo_user"
+    mysql_password: str = "uritomo_pass"
+    mysql_host: str = "localhost"
+    mysql_port: int = 3306
+    mysql_db: str = "uritomo"
+
+    database_url: Optional[str] = None
+    
+    @validator("database_url", pre=True, always=True)
+    def assemble_db_url(cls, v: Optional[str], values: dict) -> str:
+        if isinstance(v, str):
+            return v
+        return f"mysql+aiomysql://{values.get('mysql_user')}:{values.get('mysql_password')}@{values.get('mysql_host')}:{values.get('mysql_port')}/{values.get('mysql_db')}"
     db_echo: bool = False
     db_pool_size: int = 20
     db_max_overflow: int = 40

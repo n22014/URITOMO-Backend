@@ -54,7 +54,7 @@ class MeetingDataInput(BaseModel):
 
 # ============ Endpoints ============
 
-@router.post("/summarization/{room_id}", response_model=SummarizationResponse, tags=["summary"])
+@router.post("/summary/{room_id}", response_model=SummarizationResponse, tags=["summary"])
 async def get_summarization(
     room_id: str,
     db: AsyncSession = Depends(get_db)
@@ -187,7 +187,7 @@ async def get_summarization(
         translation_log=log_items
     )
 
-@router.post("/summarization/mock", response_model=SummarizationResponse, tags=["summary"])
+@router.post("/summary/mock", response_model=SummarizationResponse, tags=["summary"])
 async def create_mock_summarization(
     data: MeetingDataInput
 ):
@@ -261,7 +261,7 @@ async def create_mock_summarization(
         translation_log=log_items
     )
 
-@router.get("/summarization/mock-data", tags=["summary"])
+@router.get("/summary/mock-data", tags=["summary"])
 async def get_mock_summarization_data():
     """
     large_meeting_data.json の内容をそのまま返します。

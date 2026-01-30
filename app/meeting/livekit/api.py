@@ -4,6 +4,8 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from uuid import uuid4
+from datetime import datetime
 
 from livekit import api as lk_api
 
@@ -113,7 +115,24 @@ async def create_livekit_token(
         )
     )
     member = member_result.scalar_one_or_none()
+    
+    # Auto-add member if they are the creator (just in case membership creation failed or race condition)
+    if not member and room.created_by == current_user_id:
+        new_member = RoomMember(
+             id=f"member_{uuid4().hex}",
+             room_id=data.room_id,
+             user_id=current_user_id,
+             display_name="Owner",
+             role="owner",
+             joined_at=datetime.utcnow()
+        )
+        session.add(new_member)
+        await session.commit()
+        member = new_member
+    
     if not member:
+        # For open rooms, we might want to allow auto-join
+        # But for now, let's keep it strict but informative
         raise PermissionError("Not a member of this room")
 
     user_result = await session.execute(select(User).where(User.id == current_user_id))

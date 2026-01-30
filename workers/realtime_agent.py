@@ -221,6 +221,9 @@ def pcm16_resample(data: bytes, *, from_rate: int, to_rate: int, state):
     return converted, next_state
 
 
+STT_TRANSLATION_CHANNEL = "stt:translations"
+
+
 class RealtimeSession:
     def __init__(
         self,
@@ -243,6 +246,9 @@ class RealtimeSession:
         history_max_turns: int,
         save_stt: bool,
         trigger_debug: bool,
+        redis_url: str = "",
+        deepl_api_key: str = "",
+        translation_enabled: bool = True,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -271,6 +277,12 @@ class RealtimeSession:
         self._pending_force = False
         self._pending_log_label: Optional[str] = None
         self._save_stt = save_stt
+        
+        # Redis and Translation settings
+        self._redis_url = redis_url
+        self._deepl_api_key = deepl_api_key
+        self._translation_enabled = translation_enabled
+        self._redis: Optional[aioredis.Redis] = None
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -289,6 +301,110 @@ class RealtimeSession:
         self._last_speaker_lang: Optional[str] = None
         self._last_speaker_ts = 0.0
         self._member_cache: dict[str, Optional[str]] = {}
+    
+    async def _init_redis(self) -> None:
+        """Initialize Redis connection for STT translation broadcast."""
+        if self._redis_url and not self._redis:
+            try:
+                self._redis = aioredis.from_url(self._redis_url, encoding="utf-8", decode_responses=True)
+                print(f"[REALTIME] Redis connected for STT translation lang={self.lang}")
+            except Exception as exc:
+                print(f"[REALTIME] Redis connection failed: {exc!r}")
+    
+    async def _translate_text(self, text: str, source_lang: str, target_lang: str) -> str:
+        """Translate text using DeepL API."""
+        if not self._deepl_api_key:
+            print(f"[TRANSLATE] No API key available")
+            return f"[No Translation Key] {text}"
+        
+        # Map language codes to DeepL format
+        lang_map = {
+            "ja": "JA",
+            "ko": "KO", 
+            "Japanese": "JA",
+            "Korean": "KO",
+        }
+        src = lang_map.get(source_lang, source_lang.upper())
+        tgt = lang_map.get(target_lang, target_lang.upper())
+        
+        print(f"[TRANSLATE] Calling DeepL: {src} -> {tgt}, text={text[:50]}...")
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Use header-based authentication (new DeepL API requirement)
+                response = await client.post(
+                    "https://api-free.deepl.com/v2/translate",
+                    headers={
+                        "Authorization": f"DeepL-Auth-Key {self._deepl_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "text": [text],
+                        "source_lang": src,
+                        "target_lang": tgt,
+                    }
+                )
+                print(f"[TRANSLATE] DeepL response status: {response.status_code}")
+                if response.status_code == 200:
+                    result = response.json()
+                    translations = result.get("translations", [])
+                    if translations:
+                        translated = translations[0].get("text", text)
+                        print(f"[TRANSLATE] Success: {translated[:50]}...")
+                        return translated
+                else:
+                    print(f"[TRANSLATE] DeepL error response: {response.text}")
+            return text
+        except Exception as exc:
+            print(f"[REALTIME] Translation error: {exc!r}")
+            return text
+    
+    async def _broadcast_stt_translation(self, transcript: str) -> None:
+        """Translate STT result and broadcast via Redis."""
+        if not self._translation_enabled or not transcript:
+            return
+        
+        await self._init_redis()
+        if not self._redis:
+            return
+        
+        # Determine source and target languages
+        source_lang = self._last_speaker_lang or self.lang
+        target_lang = "ko" if source_lang in ("ja", "Japanese") else "ja"
+        
+        # Translate the transcript
+        translated_text = await self._translate_text(transcript, source_lang, target_lang)
+        
+        # Prepare the broadcast payload
+        payload = {
+            "type": "translation",
+            "room_id": self.room_id,
+            "data": {
+                "id": f"stt_{uuid.uuid4().hex[:16]}",
+                "speaker": self._last_speaker_name or "Unknown",
+                "participant_id": self._last_speaker_identity or "unknown",
+                "participant_name": self._last_speaker_name or "Unknown",
+                "Original": transcript,
+                "original_text": transcript,
+                "translated": translated_text,
+                "translated_text": translated_text,
+                "source_lang": source_lang,
+                "lang": source_lang,
+                "target_lang": target_lang,
+                "timestamp": datetime.utcnow().isoformat(),
+                "message_type": "stt",
+            }
+        }
+        
+        try:
+            await self._redis.publish(STT_TRANSLATION_CHANNEL, json.dumps(payload))
+            print(
+                f"🌐 [STT Translation] room={self.room_id} "
+                f"speaker={self._last_speaker_name} {source_lang}->{target_lang} "
+                f"original={transcript[:50]}{'...' if len(transcript) > 50 else ''}"
+            )
+        except Exception as exc:
+            print(f"[REALTIME] STT translation broadcast failed: {exc!r}")
 
     def note_speaker(self, identity: str, name: Optional[str], lang: Optional[str]) -> None:
         self._last_speaker_identity = identity
@@ -634,6 +750,8 @@ class RealtimeSession:
                     self._member_cache[speaker_id] = member_id
 
                 if not member_id:
+                    # Even without member_id, we can still broadcast STT translation
+                    await self._broadcast_stt_translation(transcript)
                     return
 
                 for _ in range(3):
@@ -667,12 +785,16 @@ class RealtimeSession:
                             f"room_id={self.room_id} seq={next_seq} "
                             f"member_id={member_id} lang={self._last_speaker_lang}"
                         )
+                        # Broadcast STT translation after saving
+                        await self._broadcast_stt_translation(transcript)
                         return
                     except IntegrityError:
                         await session.rollback()
                         continue
         except Exception as exc:
             print(f"[STT] save failed room_id={self.room_id} err={exc!r}")
+            # Still try to broadcast even if save fails
+            await self._broadcast_stt_translation(transcript)
 
     async def _push_audio(self, pcm16_24k: bytes) -> None:
         if not pcm16_24k:
@@ -964,6 +1086,8 @@ async def connect_room(
     history_max_turns: int,
     save_stt: bool,
     trigger_debug: bool,
+    redis_url: str = "",
+    deepl_api_key: str = "",
 ) -> None:
     if room_id in rooms:
         return
@@ -1103,6 +1227,8 @@ async def connect_room(
         history_max_turns=history_max_turns,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        deepl_api_key=deepl_api_key,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1123,6 +1249,8 @@ async def connect_room(
         history_max_turns=history_max_turns,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        deepl_api_key=deepl_api_key,
     )
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
@@ -1190,6 +1318,7 @@ async def listen_room_events(
     history_max_turns: int,
     save_stt: bool,
     trigger_debug: bool,
+    deepl_api_key: str = "",
 ) -> None:
     redis = aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
     pubsub = redis.pubsub()
@@ -1237,6 +1366,8 @@ async def listen_room_events(
                         history_max_turns=history_max_turns,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
+                        redis_url=redis_url,
+                        deepl_api_key=deepl_api_key,
                     )
                 except Exception as exc:
                     print(f"[EVENT] join failed room_id={room_id} error={exc!r}")
@@ -1261,6 +1392,7 @@ async def main() -> None:
     worker_id = os.getenv("WORKER_ID", "livekit_worker")
     worker_ttl = int(os.getenv("WORKER_TOKEN_TTL_SECONDS", "0"))
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    deepl_api_key = os.getenv("DEEPL_API_KEY", "")
     channel = os.getenv("LIVEKIT_ROOM_EVENTS_CHANNEL", "livekit:rooms")
     force_relay_value = os.getenv("LIVEKIT_FORCE_RELAY", "false")
     force_relay = force_relay_value.lower() in {"1", "true", "yes", "y", "on"}
@@ -1362,6 +1494,8 @@ async def main() -> None:
             history_max_turns=history_max_turns,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
+            redis_url=redis_url,
+            deepl_api_key=deepl_api_key,
         )
 
     await listen_room_events(
@@ -1391,6 +1525,7 @@ async def main() -> None:
         history_max_turns=history_max_turns,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        deepl_api_key=deepl_api_key,
     )
 
 

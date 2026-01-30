@@ -38,23 +38,22 @@ api_router.include_router(profile_router, dependencies=[Depends(security_scheme)
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(livekit_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(meeting_ws_router)
 
 
-# 3. Summary Routes (Protected)
-# Use the real summarization implementation instead of mock api
+# 3. Summary Routes (Protected) - All under /summary prefix
 from app.summarization.documents import router as summary_documents_router
 from app.summarization.main import router as summary_main_router
 from app.summarization.meeting_member import router as summary_member_router
 from app.summarization.translation_log import router as summary_translation_log_router
 from app.summarization.setup_mock import router as summary_setup_mock_router
 
-api_router.include_router(summary_documents_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_main_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_member_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_translation_log_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_setup_mock_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_documents_router, prefix="/summary", dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_main_router, prefix="/summary", dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_member_router, prefix="/summary", dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_translation_log_router, prefix="/summary", dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_setup_mock_router, prefix="/summary", dependencies=[Depends(security_scheme)])
 
 # 4. Translation Routes
 from app.translation.api import router as translation_router
 api_router.include_router(translation_router, prefix="/translation", dependencies=[Depends(security_scheme)])
+

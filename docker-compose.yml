@@ -215,6 +215,7 @@ services:
       - /app/.venv
     environment:
       PYTHONPATH: /app
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-uritomo_user}:${MYSQL_PASSWORD:-uritomo_pass}@mysql:3306/${MYSQL_DATABASE:-uritomo}
       BACKEND_URL: ${LIVEKIT_BACKEND_URL:-http://api:8000}
       ROOM_ID: ${LIVEKIT_ROOM_ID:-}
       SERVICE_AUTH: ${LIVEKIT_SERVICE_AUTH:-}
@@ -239,6 +240,7 @@ services:
       OPENAI_REALTIME_VAD_SILENCE_MS: ${OPENAI_REALTIME_VAD_SILENCE_MS:-500}
       OPENAI_WAKE_PHRASES: ${OPENAI_WAKE_PHRASES:-하이 에이전트,하이에이전트,ハイエージェント}
       OPENAI_WAKE_COOLDOWN_SECONDS: ${OPENAI_WAKE_COOLDOWN_SECONDS:-2.0}
+      DEEPL_API_KEY: ${DEEPL_API_KEY:-}
     depends_on:
       api:
         condition: service_started
