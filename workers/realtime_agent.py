@@ -30,6 +30,7 @@ REALTIME_SAMPLE_RATE = 24000
 LIVEKIT_SAMPLE_RATE = 48000
 ALIEN_STAMP = "👽" * 20
 MOCK_TRANSLATION_PREFIXES = ("[KO]", "[JA]", "[TRANS]", "[Korean]", "[Japanese]")
+REALTIME_MIN_COMMIT_MS = 100
 
 
 @dataclass
@@ -321,6 +322,8 @@ class RealtimeSession:
         self._ready = asyncio.Event()
         self._closed = False
         self._send_lock = asyncio.Lock()
+        self._buffered_ms = 0.0
+        self._last_commit_ts = 0.0
 
         self._out_buffer = bytearray()
         self._out_state = None
@@ -429,26 +432,33 @@ class RealtimeSession:
     async def _send_loop(self) -> None:
         assert self._ws is not None
         try:
-            last_commit = time.monotonic()
-            has_audio = False
+            if self._last_commit_ts <= 0:
+                self._last_commit_ts = time.monotonic()
             while True:
                 chunk = await self._send_queue.get()
+                chunk_ms = (len(chunk) / (REALTIME_SAMPLE_RATE * 2)) * 1000.0
+                if chunk_ms <= 0:
+                    continue
+                self._buffered_ms += chunk_ms
                 payload = {
                     "type": "input_audio_buffer.append",
                     "audio": base64.b64encode(chunk).decode("ascii"),
                 }
                 await self._send_json(payload)
-                has_audio = True
-                if self._force_commit_s and has_audio:
+                if self._force_commit_s:
                     now = time.monotonic()
-                    if now - last_commit >= self._force_commit_s:
+                    if (
+                        now - self._last_commit_ts >= self._force_commit_s
+                        and self._buffered_ms >= REALTIME_MIN_COMMIT_MS
+                    ):
                         await self._send_json({"type": "input_audio_buffer.commit"})
                         print(
                             f"[REALTIME] buffer.commit sent lang={self.lang} "
-                            f"reason=timer interval_ms={self._force_commit_ms}"
+                            f"reason=timer interval_ms={self._force_commit_ms} "
+                            f"buffer_ms={self._buffered_ms:.1f}"
                         )
-                        last_commit = now
-                        has_audio = False
+                        self._last_commit_ts = now
+                        self._buffered_ms = 0.0
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -509,6 +519,8 @@ class RealtimeSession:
                     print(f"[REALTIME] vad.stopped lang={self.lang}")
                 elif event_type == "input_audio_buffer.committed":
                     print(f"[REALTIME] buffer.committed lang={self.lang}")
+                    self._buffered_ms = 0.0
+                    self._last_commit_ts = time.monotonic()
                 elif event_type == "input_audio_buffer.cleared":
                     print(f"[REALTIME] buffer.cleared lang={self.lang}")
                 elif event_type == "input_audio_buffer.timeout_triggered":
