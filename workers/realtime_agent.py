@@ -23,10 +23,13 @@ from app.infra.db import AsyncSessionLocal
 from app.models.room import RoomMember, RoomLiveSession
 from app.models.stt import RoomAiResponse, RoomSttResult
 from app.translation.deepl_service import deepl_service
+from app.translation.openai_service import openai_service
 
 
 REALTIME_SAMPLE_RATE = 24000
 LIVEKIT_SAMPLE_RATE = 48000
+ALIEN_STAMP = "👽" * 20
+MOCK_TRANSLATION_PREFIXES = ("[KO]", "[JA]", "[TRANS]", "[Korean]", "[Japanese]")
 
 
 @dataclass
@@ -90,6 +93,11 @@ def opposite_lang_code(value: Optional[str]) -> Optional[str]:
     if code == "ja":
         return "ko"
     return None
+
+def looks_like_mock_translation(text: Optional[str]) -> bool:
+    if not text:
+        return True
+    return text.startswith(MOCK_TRANSLATION_PREFIXES)
 
 
 async def fetch_livekit_token(
@@ -266,6 +274,9 @@ class RealtimeSession:
         summary_max_chars: int,
         save_stt: bool,
         trigger_debug: bool,
+        redis_url: str,
+        stt_channel: str,
+        force_commit_ms: int,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -298,6 +309,10 @@ class RealtimeSession:
         self._save_stt = save_stt
         self._last_stt_seq: Optional[int] = None
         self._last_stt_text: Optional[str] = None
+        self._redis_url = redis_url
+        self._stt_channel = stt_channel
+        self._force_commit_ms = max(force_commit_ms, 0)
+        self._force_commit_s = self._force_commit_ms / 1000.0 if self._force_commit_ms else 0.0
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -414,6 +429,8 @@ class RealtimeSession:
     async def _send_loop(self) -> None:
         assert self._ws is not None
         try:
+            last_commit = time.monotonic()
+            has_audio = False
             while True:
                 chunk = await self._send_queue.get()
                 payload = {
@@ -421,6 +438,17 @@ class RealtimeSession:
                     "audio": base64.b64encode(chunk).decode("ascii"),
                 }
                 await self._send_json(payload)
+                has_audio = True
+                if self._force_commit_s and has_audio:
+                    now = time.monotonic()
+                    if now - last_commit >= self._force_commit_s:
+                        await self._send_json({"type": "input_audio_buffer.commit"})
+                        print(
+                            f"[REALTIME] buffer.commit sent lang={self.lang} "
+                            f"reason=timer interval_ms={self._force_commit_ms}"
+                        )
+                        last_commit = now
+                        has_audio = False
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -792,12 +820,20 @@ class RealtimeSession:
                     target_lang_name = lang_code_to_name(target_lang_code)
                     if source_lang_name and target_lang_name:
                         try:
-                            translated_text = deepl_service.translate_text(
-                                text=transcript,
-                                source_lang=source_lang_name,
-                                target_lang=target_lang_name,
-                            )
-                            translated_lang = target_lang_code
+                            if deepl_service.enabled:
+                                translated_text = deepl_service.translate_text(
+                                    text=transcript,
+                                    source_lang=source_lang_name,
+                                    target_lang=target_lang_name,
+                                )
+                            if looks_like_mock_translation(translated_text):
+                                translated_text = await openai_service.translate_text(
+                                    text=transcript,
+                                    source_lang=source_lang_name,
+                                    target_lang=target_lang_name,
+                                )
+                            if translated_text:
+                                translated_lang = target_lang_code
                         except Exception as exc:
                             print(f"[STT] translate failed room_id={self.room_id} err={exc!r}")
 
@@ -832,9 +868,30 @@ class RealtimeSession:
                         self._last_stt_seq = next_seq
                         self._last_stt_text = transcript
                         print(
-                            "🧾 [STT] saved room_stt_results "
+                            f"{ALIEN_STAMP} 🧾 [STT] saved room_stt_results "
                             f"room_id={self.room_id} session_id={session_id} "
-                            f"seq={next_seq} member_id={member_id} lang={self.lang}"
+                            f"seq={next_seq} member_id={member_id} lang={self.lang} "
+                            f"text={transcript!r} translated={translated_text!r}"
+                        )
+                        await self._publish_stt_event(
+                            room_id=self.room_id,
+                            message={
+                                "type": "stt",
+                                "data": {
+                                    "id": stt_id,
+                                    "room_id": self.room_id,
+                                    "session_id": session_id,
+                                    "seq": next_seq,
+                                    "user_id": speaker_id,
+                                    "display_name": self._last_speaker_name or "Guest",
+                                    "text": transcript,
+                                    "lang": self._last_speaker_lang or self.lang,
+                                    "translated_text": translated_text,
+                                    "translated_lang": translated_lang,
+                                    "is_final": True,
+                                    "created_at": datetime.utcnow().isoformat(),
+                                },
+                            },
                         )
                         return
                     except IntegrityError:
@@ -842,6 +899,24 @@ class RealtimeSession:
                         continue
         except Exception as exc:
             print(f"[STT] save failed room_id={self.room_id} err={exc!r}")
+
+    async def _publish_stt_event(self, room_id: str, message: dict) -> None:
+        payload = {
+            "room_id": room_id,
+            "message": message,
+        }
+        redis = None
+        try:
+            redis = aioredis.from_url(self._redis_url, encoding="utf-8", decode_responses=True)
+            await redis.publish(self._stt_channel, json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:
+            print(f"[STT] publish failed room_id={room_id} err={exc!r}")
+        finally:
+            if redis:
+                try:
+                    await redis.close()
+                except Exception:
+                    pass
 
     async def _save_ai_response(self, text: str) -> None:
         if not text:
@@ -1181,6 +1256,9 @@ async def connect_room(
     summary_max_chars: int,
     save_stt: bool,
     trigger_debug: bool,
+    redis_url: str,
+    stt_channel: str,
+    force_commit_ms: int,
 ) -> None:
     if room_id in rooms:
         state = rooms.get(room_id)
@@ -1330,6 +1408,9 @@ async def connect_room(
         summary_max_chars=summary_max_chars,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        stt_channel=stt_channel,
+        force_commit_ms=force_commit_ms,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1352,6 +1433,9 @@ async def connect_room(
         summary_max_chars=summary_max_chars,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        stt_channel=stt_channel,
+        force_commit_ms=force_commit_ms,
     )
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
@@ -1395,6 +1479,7 @@ async def disconnect_room(room_id: str, rooms: dict[str, RoomState]) -> None:
 async def listen_room_events(
     redis_url: str,
     channel: str,
+    stt_channel: str,
     auth: AuthState,
     rooms: dict[str, RoomState],
     auto_subscribe: bool,
@@ -1416,6 +1501,7 @@ async def listen_room_events(
     vad_threshold: float,
     vad_prefix_ms: int,
     vad_silence_ms: int,
+    force_commit_ms: int,
     always_respond: bool,
     history_max_turns: int,
     summary_max_chars: int,
@@ -1467,11 +1553,14 @@ async def listen_room_events(
                         vad_threshold=vad_threshold,
                         vad_prefix_ms=vad_prefix_ms,
                         vad_silence_ms=vad_silence_ms,
+                        force_commit_ms=force_commit_ms,
                         always_respond=always_respond,
                         history_max_turns=history_max_turns,
                         summary_max_chars=summary_max_chars,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
+                        redis_url=redis_url,
+                        stt_channel=stt_channel,
                     )
                 except Exception as exc:
                     print(f"[EVENT] join failed room_id={room_id} error={exc!r}")
@@ -1497,6 +1586,7 @@ async def main() -> None:
     worker_ttl = int(os.getenv("WORKER_TOKEN_TTL_SECONDS", "0"))
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     channel = os.getenv("LIVEKIT_ROOM_EVENTS_CHANNEL", "livekit:rooms")
+    stt_channel = os.getenv("LIVEKIT_STT_EVENTS_CHANNEL", "livekit:stt")
     force_relay_value = os.getenv("LIVEKIT_FORCE_RELAY", "false")
     force_relay = force_relay_value.lower() in {"1", "true", "yes", "y", "on"}
 
@@ -1509,7 +1599,7 @@ async def main() -> None:
     default_voice = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
     voice_ko = os.getenv("OPENAI_REALTIME_VOICE_KO", default_voice)
     voice_ja = os.getenv("OPENAI_REALTIME_VOICE_JA", default_voice)
-    transcribe_model = os.getenv("OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+    transcribe_model = os.getenv("OPENAI_REALTIME_TRANSCRIBE_MODEL") or "gpt-4o-mini-transcribe"
     output_modalities_raw = os.getenv("OPENAI_REALTIME_OUTPUT_MODALITIES", "audio")
     output_modalities = [
         part.strip().lower()
@@ -1554,6 +1644,7 @@ async def main() -> None:
     vad_threshold = float(os.getenv("OPENAI_REALTIME_VAD_THRESHOLD", "0.5"))
     vad_prefix_ms = int(os.getenv("OPENAI_REALTIME_VAD_PREFIX_MS", "300"))
     vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "500"))
+    force_commit_ms = int(os.getenv("OPENAI_REALTIME_FORCE_COMMIT_MS", "1200"))
 
     if not backend:
         raise RuntimeError("Missing backend. Provide --backend or env BACKEND_URL")
@@ -1563,6 +1654,11 @@ async def main() -> None:
     summary_max_chars = int(os.getenv("OPENAI_HISTORY_SUMMARY_MAX_CHARS", "800"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
+    print(
+        f"[BOOT] stt_config save_stt={save_stt} "
+        f"transcribe_model={transcribe_model} output_modalities={output_modalities} "
+        f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms}"
+    )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
     trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
 
@@ -1617,16 +1713,20 @@ async def main() -> None:
             vad_threshold=vad_threshold,
             vad_prefix_ms=vad_prefix_ms,
             vad_silence_ms=vad_silence_ms,
+            force_commit_ms=force_commit_ms,
             always_respond=always_respond,
             history_max_turns=history_max_turns,
             summary_max_chars=summary_max_chars,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
+            redis_url=redis_url,
+            stt_channel=stt_channel,
         )
 
     await listen_room_events(
         redis_url=redis_url,
         channel=channel,
+        stt_channel=stt_channel,
         auth=auth,
         rooms=rooms,
         auto_subscribe=auto_subscribe,
@@ -1648,6 +1748,7 @@ async def main() -> None:
         vad_threshold=vad_threshold,
         vad_prefix_ms=vad_prefix_ms,
         vad_silence_ms=vad_silence_ms,
+        force_commit_ms=force_commit_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
