@@ -8,8 +8,8 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.ai import AIEvent
-    from app.models.live import Live
     from app.models.message import ChatMessage
+    from app.models.stt import RoomAiResponse, RoomSttResult
     from app.models.user import User
 
 
@@ -33,8 +33,9 @@ class Room(Base):
     creator: Mapped["User"] = relationship("User", back_populates="created_rooms")
     members: Mapped[List["RoomMember"]] = relationship("RoomMember", back_populates="room")
     messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="room")
-    live_events: Mapped[List["Live"]] = relationship("Live", back_populates="room")
     ai_events: Mapped[List["AIEvent"]] = relationship("AIEvent", back_populates="room")
+    stt_results: Mapped[List["RoomSttResult"]] = relationship("RoomSttResult", back_populates="room")
+    ai_responses: Mapped[List["RoomAiResponse"]] = relationship("RoomAiResponse", back_populates="room")
     live_sessions: Mapped[List["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="room")
 
 
@@ -61,8 +62,8 @@ class RoomMember(Base):
     room: Mapped["Room"] = relationship("Room", back_populates="members")
     user: Mapped[Optional["User"]] = relationship("User", back_populates="memberships")
     sent_messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="sender_member")
-    live_utterances: Mapped[List["Live"]] = relationship("Live", back_populates="member")
     live_session_participations: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="member")
+    stt_results: Mapped[List["RoomSttResult"]] = relationship("RoomSttResult", back_populates="member")
 
 
 class RoomLiveSession(Base):
@@ -89,6 +90,8 @@ class RoomLiveSession(Base):
     room: Mapped["Room"] = relationship("Room", back_populates="live_sessions")
     starter: Mapped["User"] = relationship("User", back_populates="started_live_sessions")
     session_members: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="session")
+    stt_results: Mapped[List["RoomSttResult"]] = relationship("RoomSttResult", back_populates="session")
+    ai_responses: Mapped[List["RoomAiResponse"]] = relationship("RoomAiResponse", back_populates="session")
 
 
 class RoomLiveSessionMember(Base):
