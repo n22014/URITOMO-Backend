@@ -1,3 +1,0 @@
-"""
-Background Worker Module
-"""
