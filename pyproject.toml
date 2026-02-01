@@ -21,9 +21,8 @@ aiomysql = "^0.2.0"
 pymysql = "^1.1.0"
 cryptography = "^42.0.0"
 
-# Redis & Queue
+# Redis
 redis = "^5.0.1"
-rq = "^1.16.1"
 hiredis = "^2.3.2"
 
 # Vector Database
@@ -148,7 +147,6 @@ ignore_missing_imports = true
 module = [
     "qdrant_client.*",
     "minio.*",
-    "rq.*",
 ]
 ignore_missing_imports = true
 

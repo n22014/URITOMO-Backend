@@ -102,12 +102,6 @@ class Settings(BaseSettings):
     summary_provider: Literal["OPENAI", "MOCK"] = "MOCK"
     summary_model: str = "gpt-4-turbo-preview"
 
-    # Background Worker
-    worker_queues: list[str] = ["default", "high", "low"]
-    worker_result_ttl: int = 3600
-    worker_job_timeout: int = 600
-    worker_service_key: Optional[str] = None
-
     # CORS
     cors_origins: list[str] = [
         "http://localhost:3000",
