@@ -19,6 +19,7 @@ from redis import asyncio as aioredis
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.core.time import to_jst_iso
 from app.infra.db import AsyncSessionLocal
 from app.models.room import RoomMember, RoomLiveSession
 from app.models.stt import RoomAiResponse, RoomSttResult
@@ -913,7 +914,7 @@ class RealtimeSession:
                                     "translated_text": translated_text,
                                     "translated_lang": translated_lang,
                                     "is_final": True,
-                                    "created_at": datetime.utcnow().isoformat(),
+                                    "created_at": to_jst_iso(datetime.utcnow()),
                                 },
                             },
                         )

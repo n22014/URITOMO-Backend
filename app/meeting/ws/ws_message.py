@@ -11,6 +11,7 @@ from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
 from app.core.logging import get_logger
+from app.core.time import to_jst_iso
 
 logger = get_logger(__name__)
 
@@ -27,7 +28,7 @@ def _ai_event_payload(ai_event: AIEvent) -> dict:
         "text": ai_event.text,
         "lang": ai_event.lang,
         "meta": ai_event.meta,
-        "created_at": ai_event.created_at.isoformat() if ai_event.created_at else None,
+        "created_at": to_jst_iso(ai_event.created_at),
     }
 
 def _normalize_lang(lang: Optional[str]) -> str:
@@ -203,7 +204,7 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 "lang": new_message.lang,
                 "translated_text": new_message.translated_text,
                 "translated_lang": new_message.translated_lang,
-                "created_at": new_message.created_at.isoformat()
+                "created_at": to_jst_iso(new_message.created_at),
             }
         }
         await manager.broadcast(room_id, broadcast_data)
@@ -300,7 +301,7 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 "text": new_message.text,
                 "lang": new_message.lang,
                 "is_final": True,
-                "created_at": new_message.created_at.isoformat()
+                "created_at": to_jst_iso(new_message.created_at),
             }
         }
         await manager.broadcast(session_id, broadcast_data)
