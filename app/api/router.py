@@ -16,7 +16,6 @@ from app.api.room.create import router as room_create_router
 from app.worker.worker_token import router as worker_token_router
 from app.api.user.friends import router as friends_router
 
-from app.meeting.sessions import router as meeting_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
 from app.meeting.live_history import router as meeting_history_router
 from app.meeting.livekit.api import router as livekit_router
@@ -38,8 +37,8 @@ api_router.include_router(room_create_router, dependencies=[Depends(security_sch
 api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(profile_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 
-api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(livekit_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_ws_router)
