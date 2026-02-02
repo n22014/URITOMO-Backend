@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_session_ttl: int = 3600  # 1 hour
 
+    # Background Worker
+    worker_job_timeout: int = 600  # 10 minutes
+    worker_result_ttl: int = 3600  # 1 hour
+
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
