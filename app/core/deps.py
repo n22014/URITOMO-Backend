@@ -16,8 +16,17 @@ from app.core.token import security_scheme, get_current_user_id, CurrentUserDep
 from app.infra.db import get_db
 from app.infra.redis import get_redis
 from app.infra.qdrant import get_qdrant
+from app.infra.queue import JobQueue, QueueFactory
 
 # Type aliases for common dependencies
 SessionDep = Annotated[AsyncSession, Depends(get_db)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 QdrantDep = Annotated[AsyncQdrantClient, Depends(get_qdrant)]
+
+
+async def get_queue(name: str = "default") -> AsyncGenerator[JobQueue, None]:
+    """Get job queue instance (no RQ Worker required)"""
+    yield QueueFactory.get_queue(name)
+
+
+QueueDep = Annotated[JobQueue, Depends(get_queue)]
