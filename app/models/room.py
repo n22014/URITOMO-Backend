@@ -9,8 +9,34 @@ from app.models.base import Base
 if TYPE_CHECKING:
     from app.models.ai import AIEvent
     from app.models.message import ChatMessage
+    from app.models.message import ChatMessage
     from app.models.stt import RoomAiResponse, RoomSttResult
     from app.models.user import User
+
+
+class RoomInvitation(Base):
+    __tablename__ = "room_invitations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False)
+    inviter_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")  # pending, accepted, rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=datetime.utcnow)
+    responded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_room_invitations_invitee_status", "invitee_id", "status"),
+        Index("idx_room_invitations_room", "room_id"),
+        Index("idx_room_invitations_room_invitee", "room_id", "invitee_id"),
+    )
+
+    # Relationships
+    room: Mapped["Room"] = relationship("Room", back_populates="invitations")
+    inviter: Mapped["User"] = relationship("User", foreign_keys=[inviter_id])
+    invitee: Mapped["User"] = relationship("User", foreign_keys=[invitee_id])
+
 
 
 class Room(Base):
@@ -37,6 +63,8 @@ class Room(Base):
     stt_results: Mapped[List["RoomSttResult"]] = relationship("RoomSttResult", back_populates="room")
     ai_responses: Mapped[List["RoomAiResponse"]] = relationship("RoomAiResponse", back_populates="room")
     live_sessions: Mapped[List["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="room")
+    invitations: Mapped[List["RoomInvitation"]] = relationship("RoomInvitation", back_populates="room")
+
 
 
 class RoomMember(Base):

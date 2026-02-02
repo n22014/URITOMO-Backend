@@ -13,7 +13,6 @@ from app.api.user.profile import router as profile_router
 
 from app.api.user.room_detail import router as room_detail_router
 from app.api.room.create import router as room_create_router
-from app.worker.worker_token import router as worker_token_router
 from app.api.user.friends import router as friends_router
 
 from app.meeting.ws.ws_base import router as meeting_ws_router
@@ -27,13 +26,13 @@ api_router = APIRouter()
 # 1. Routes that DON'T need authentication (Public/Debug)
 api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(auth_router)  # Includes real signup/login
-api_router.include_router(worker_token_router)
 
 # 2. Routes that DO need authentication (Protected)
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
 
 api_router.include_router(room_detail_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(room_create_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(profile_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
